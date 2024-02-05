@@ -14,7 +14,7 @@ func SimpleConnectionFromSSH(host string, port uint16, config *ssh.ClientConfig)
 		return nil, nil, err
 	}
 
-	doneCh := make(chan struct{}, 0)
+	doneCh := make(chan struct{})
 	done := func() { close(doneCh) }
 
 	closeWhenDone := func(closer io.Closer) {

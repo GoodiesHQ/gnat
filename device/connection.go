@@ -126,7 +126,7 @@ func (conn *simpleDeviceConnection) ReadUntilFunc(ctx context.Context, timeout t
 		case <-ctx.Done():
 			return buffer.Bytes(), fmt.Errorf("parent context is done")
 		case <-timeoutCtx.Done():
-			return buffer.Bytes(), fmt.Errorf("timeout reached without matching regex.")
+			return buffer.Bytes(), fmt.Errorf("timeout reached without matching regex")
 		case tmp, ok := <-conn.ch:
 			if !ok {
 				err := fmt.Errorf("channel not ok while reading")
