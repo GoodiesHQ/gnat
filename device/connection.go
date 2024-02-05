@@ -54,7 +54,6 @@ func (conn *simpleDeviceConnection) Start(ctx context.Context) error {
 			n, err := conn.stdout.Read(buf)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					log.Warn().Err(err).Msg("EOF received")
 					return
 				}
 				log.Error().Err(err).Msg("connection errored out")
