@@ -18,14 +18,6 @@ type ProcurveDevice struct {
 	device.DeviceSettings
 }
 
-func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
-	return &ProcurveDevice{DeviceSettings: settings}
-}
-
-func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
-}
-
 // remote ansi escape sequences, from stripansi package
 var ansi = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 
@@ -35,6 +27,7 @@ var sequences = regexp.MustCompile(`#\s+(\x1b\[(\??)\d+(;?)\d+[a-zA-Z]){5}`)
 func (procurve *ProcurveDevice) GetMIB(ctx context.Context, mib string) (string, error) {
 	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, fmt.Sprintf("getMIB %s", mib))
 	if err != nil {
+		log.Info().Msg("result", result.Output)
 		return "", err
 	}
 
@@ -90,10 +83,6 @@ func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
 	return nil
 }
 
-func (procurve *ProcurveDevice) FlushFor(ctx context.Context, t time.Duration) error {
-	return procurve.Connection.FlushFor(ctx, t)
-}
-
 func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
 	x, err := procurve.Cmd(ctx, procurve.TimeoutRead, "no page")
 	if err != nil {
@@ -128,14 +117,6 @@ func (procurve *ProcurveDevice) Cmd(ctx context.Context, timeout time.Duration, 
 
 func (procurve *ProcurveDevice) GetRunningConfig(ctx context.Context) (string, error) {
 	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, "write terminal")
-	if err != nil {
-		return "", err
-	}
-	return utils.JoinLines(utils.SplitLines(result.Output)), nil
-}
-
-func (procurve *ProcurveDevice) GetLogs(ctx context.Context) (string, error) {
-	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, "show log -r")
 	if err != nil {
 		return "", err
 	}
@@ -181,12 +162,4 @@ func (procurve *ProcurveDevice) GetRAM(ctx context.Context) (int, error) {
 	}
 
 	return (100 * memAlloc / memTotal), nil
-}
-
-func (procurve *ProcurveDevice) GetUptime(ctx context.Context) (string, error) {
-	return procurve.GetMIB(ctx, "sysUpTime.0")
-}
-
-func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) {
-	return procurve.GetMIB(ctx, "sysName.0")
 }

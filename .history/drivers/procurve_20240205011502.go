@@ -19,11 +19,9 @@ type ProcurveDevice struct {
 }
 
 func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
-	return &ProcurveDevice{DeviceSettings: settings}
-}
-
-func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
+	return &ProcurveDevice{
+		DeviceSettings: settings,
+	}
 }
 
 // remote ansi escape sequences, from stripansi package

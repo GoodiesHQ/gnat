@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goodieshq/gnat/device"
+	"github.com/goodieshq/gnat/drivers"
 	"github.com/goodieshq/gnat/utils"
 	"github.com/rs/zerolog/log"
 )
@@ -23,7 +24,7 @@ func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
 }
 
 func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
+	return drivers.RegisterDeviceSwitch("procurve", NewProcurveDevice)
 }
 
 // remote ansi escape sequences, from stripansi package

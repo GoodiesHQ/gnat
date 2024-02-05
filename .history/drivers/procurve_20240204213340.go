@@ -5,25 +5,15 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/goodieshq/gnat/device"
-	"github.com/goodieshq/gnat/utils"
 	"github.com/rs/zerolog/log"
 )
 
 type ProcurveDevice struct {
 	device.DeviceSettings
-}
-
-func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
-	return &ProcurveDevice{DeviceSettings: settings}
-}
-
-func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
 }
 
 // remote ansi escape sequences, from stripansi package
@@ -90,10 +80,6 @@ func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
 	return nil
 }
 
-func (procurve *ProcurveDevice) FlushFor(ctx context.Context, t time.Duration) error {
-	return procurve.Connection.FlushFor(ctx, t)
-}
-
 func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
 	x, err := procurve.Cmd(ctx, procurve.TimeoutRead, "no page")
 	if err != nil {
@@ -131,15 +117,7 @@ func (procurve *ProcurveDevice) GetRunningConfig(ctx context.Context) (string, e
 	if err != nil {
 		return "", err
 	}
-	return utils.JoinLines(utils.SplitLines(result.Output)), nil
-}
-
-func (procurve *ProcurveDevice) GetLogs(ctx context.Context) (string, error) {
-	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, "show log -r")
-	if err != nil {
-		return "", err
-	}
-	return utils.JoinLines(utils.SplitLines(result.Output)), nil
+	return result.Output, nil
 }
 
 func (procurve *ProcurveDevice) GetVersion(ctx context.Context) (string, error) {
@@ -150,43 +128,6 @@ func (procurve *ProcurveDevice) GetBootROMVersion(ctx context.Context) (string, 
 	return procurve.GetMIB(ctx, "hpHttpMgROMVersion.0")
 }
 
-func (procurve *ProcurveDevice) GetCPU(ctx context.Context) (int, error) {
-	s, err := procurve.GetMIB(ctx, "hpSwitchCpuStat.0")
-	if err != nil {
-		return -1, err
-	}
-
-	return strconv.Atoi(strings.Replace(s, ",", "", -1))
-}
-
-func (procurve *ProcurveDevice) GetRAM(ctx context.Context) (int, error) {
-	memAllocStr, err := procurve.GetMIB(ctx, "hpLocalMemAllocBytes.1")
-	if err != nil {
-		return -1, err
-	}
-
-	memTotalStr, err := procurve.GetMIB(ctx, "hpLocalMemTotalBytes.1")
-	if err != nil {
-		return -1, err
-	}
-
-	memAlloc, err := strconv.Atoi(strings.ReplaceAll(memAllocStr, ",", ""))
-	if err != nil {
-		return -1, err
-	}
-
-	memTotal, err := strconv.Atoi(strings.ReplaceAll(memTotalStr, ",", ""))
-	if err != nil {
-		return -1, err
-	}
-
-	return (100 * memAlloc / memTotal), nil
-}
-
-func (procurve *ProcurveDevice) GetUptime(ctx context.Context) (string, error) {
-	return procurve.GetMIB(ctx, "sysUpTime.0")
-}
-
-func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) {
-	return procurve.GetMIB(ctx, "sysName.0")
+func (procurve *ProcurveDevice) GetCPU(ctx context.Context) (string, error) {
+	return procurve.GetMIB(ctx, "hpHttpMgROMVersion.0")
 }

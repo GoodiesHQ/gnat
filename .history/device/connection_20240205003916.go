@@ -93,19 +93,6 @@ func (conn *simpleDeviceConnection) Stop() error {
 func (conn *simpleDeviceConnection) FlushFor(ctx context.Context, t time.Duration) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, t)
 	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-timeoutCtx.Done():
-			return nil
-		case _, ok := <-conn.ch:
-			if !ok {
-				return fmt.Errorf("flush chan not ok")
-			}
-		}
-	}
 }
 
 func (conn *simpleDeviceConnection) ReadUntilFunc(ctx context.Context, timeout time.Duration, f DeviceInputCondition) ([]byte, error) {

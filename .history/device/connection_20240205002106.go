@@ -3,7 +3,6 @@ package device
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -53,10 +52,6 @@ func (conn *simpleDeviceConnection) Start(ctx context.Context) error {
 		for {
 			n, err := conn.stdout.Read(buf)
 			if err != nil {
-				if errors.Is(err, io.EOF) {
-					log.Warn().Err(err).Msg("EOF received")
-					return
-				}
 				log.Error().Err(err).Msg("connection errored out")
 				return
 			}
@@ -90,24 +85,6 @@ func (conn *simpleDeviceConnection) Stop() error {
 	return nil
 }
 
-func (conn *simpleDeviceConnection) FlushFor(ctx context.Context, t time.Duration) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, t)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-timeoutCtx.Done():
-			return nil
-		case _, ok := <-conn.ch:
-			if !ok {
-				return fmt.Errorf("flush chan not ok")
-			}
-		}
-	}
-}
-
 func (conn *simpleDeviceConnection) ReadUntilFunc(ctx context.Context, timeout time.Duration, f DeviceInputCondition) ([]byte, error) {
 	conn.Start(ctx)
 
@@ -127,7 +104,7 @@ func (conn *simpleDeviceConnection) ReadUntilFunc(ctx context.Context, timeout t
 		case <-ctx.Done():
 			return buffer.Bytes(), fmt.Errorf("parent context is done")
 		case <-timeoutCtx.Done():
-			return buffer.Bytes(), fmt.Errorf("timeout reached without matching regex.")
+			return buffer.Bytes(), fmt.Errorf("timeout reached without matching regex")
 		case tmp, ok := <-conn.ch:
 			if !ok {
 				err := fmt.Errorf("channel not ok while reading")

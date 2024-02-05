@@ -23,7 +23,7 @@ func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
 }
 
 func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
+	return drivers.RegisterDeviceSwitch("procurve", NewProcurveDevice)
 }
 
 // remote ansi escape sequences, from stripansi package

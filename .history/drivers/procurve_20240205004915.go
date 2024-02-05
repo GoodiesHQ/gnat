@@ -18,14 +18,6 @@ type ProcurveDevice struct {
 	device.DeviceSettings
 }
 
-func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
-	return &ProcurveDevice{DeviceSettings: settings}
-}
-
-func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
-}
-
 // remote ansi escape sequences, from stripansi package
 var ansi = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 
@@ -88,10 +80,6 @@ func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (procurve *ProcurveDevice) FlushFor(ctx context.Context, t time.Duration) error {
-	return procurve.Connection.FlushFor(ctx, t)
 }
 
 func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
@@ -185,8 +173,4 @@ func (procurve *ProcurveDevice) GetRAM(ctx context.Context) (int, error) {
 
 func (procurve *ProcurveDevice) GetUptime(ctx context.Context) (string, error) {
 	return procurve.GetMIB(ctx, "sysUpTime.0")
-}
-
-func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) {
-	return procurve.GetMIB(ctx, "sysName.0")
 }

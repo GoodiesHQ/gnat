@@ -13,7 +13,6 @@ type Device interface {
 	Initialize(context.Context) error                                  // run any commands necessary to start the connection
 	DisablePaging(context.Context) error                               // stop the switch from taking breaks in between long outputs
 	Cmd(context.Context, time.Duration, string) (*DeviceResult, error) // Run a command and receive the output/switch error as a result
-	FlushFor(context.Context, time.Duration) error                     // flush the read data for a period of time (useful if the last command timed out)
 }
 
 type DeviceInputCondition func([]byte) bool

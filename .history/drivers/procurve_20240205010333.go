@@ -18,14 +18,6 @@ type ProcurveDevice struct {
 	device.DeviceSettings
 }
 
-func NewProcurveDevice(settings device.DeviceSettings) device.SwitchDevice {
-	return &ProcurveDevice{DeviceSettings: settings}
-}
-
-func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
-}
-
 // remote ansi escape sequences, from stripansi package
 var ansi = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 
