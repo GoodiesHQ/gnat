@@ -162,6 +162,7 @@ func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
 		log.Info().Str("output", x.Output).Msg("failed to disable paging")
 		return err
 	}
+	log.Info().Ctx(ctx).Msg("Disabled Paging")
 	return err
 }
 

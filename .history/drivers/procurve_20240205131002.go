@@ -38,36 +38,10 @@ func (procurve *ProcurveDevice) GetValueMIB(ctx context.Context, mib string) (st
 	return v, err
 }
 
-func (procurve *ProcurveDevice) GetMembers(ctx context.Context) ([]string, error) {
+func (procurve *ProcurveDevice) GetMembers(ctx context.Context) []string {
 	if procurve.memberMIBs != nil {
-		return procurve.memberMIBs, nil
+		return procurve.memberMIBs
 	}
-
-	ids := make([]string, 0)
-
-	keys, vals, err := procurve.WalkMIB(ctx, "entPhysicalName")
-	if err != nil {
-		return nil, err
-	}
-
-	for i, val := range vals {
-		// find only physical devices with the type "chassis", these are the physical switches
-		if strings.ToLower(val) == "chassis" {
-			if strings.Count(keys[i], ".") != 1 {
-				return nil, fmt.Errorf("invalid MIB name returned while walking")
-			}
-			// extract the SNMP device ID
-			id := strings.Split(keys[i], ".")[1]
-			if err != nil {
-				return nil, err
-			}
-			ids = append(ids, id)
-		}
-	}
-
-	procurve.memberMIBs = ids
-
-	return procurve.memberMIBs, nil
 }
 
 func (procurve *ProcurveDevice) GetMIB(ctx context.Context, mib string) (string, string, error) {
@@ -141,8 +115,10 @@ func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, procurve.RegexInit()); err != nil {
+	if data, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, sequences); err != nil {
 		return err
+	} else {
+		log.Info().Bytes("data", data).Send()
 	}
 
 	if err := procurve.DisablePaging(ctx); err != nil {
@@ -162,6 +138,7 @@ func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
 		log.Info().Str("output", x.Output).Msg("failed to disable paging")
 		return err
 	}
+	log.Info().Str("output", x.Output).Msg("disabled paging")
 	return err
 }
 
@@ -174,7 +151,7 @@ func (procurve *ProcurveDevice) Cmd(ctx context.Context, timeout time.Duration, 
 	procurve.Connection.Send(buf.Bytes())
 
 	// read until the desired regex
-	data, err := procurve.Connection.ReadUntilMatch(ctx, timeout, procurve.RegexCmd())
+	data, err := procurve.Connection.ReadUntilMatch(ctx, timeout, sequences)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +178,14 @@ func (procurve *ProcurveDevice) GetLogs(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return utils.JoinLines(utils.SplitLines(result.Output)), nil
+}
+
+func (procurve *ProcurveDevice) GetVersion(ctx context.Context) (string, error) {
+	return procurve.GetValueMIB(ctx, "hpHttpMgVersion.0")
+}
+
+func (procurve *ProcurveDevice) GetBootROMVersion(ctx context.Context) (string, error) {
+	return procurve.GetValueMIB(ctx, "hpHttpMgROMVersion.0")
 }
 
 func (procurve *ProcurveDevice) GetCPU(ctx context.Context) (int, error) {
@@ -244,59 +229,35 @@ func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) 
 	return procurve.GetValueMIB(ctx, "sysName.0")
 }
 
-func (procurve *ProcurveDevice) GetVersion(ctx context.Context) ([]string, error) {
-	versions := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range ids {
-		sn, err := procurve.GetValueMIB(ctx, "entPhysicalSoftwareRev."+id)
-		if err != nil {
-			return nil, err
-		}
-		versions = append(versions, sn)
-	}
-
-	return versions, nil
-}
-
-func (procurve *ProcurveDevice) GetVersionBootROM(ctx context.Context) ([]string, error) {
-	versions := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range ids {
-		sn, err := procurve.GetValueMIB(ctx, "entPhysicalFirmwareRev."+id)
-		if err != nil {
-			return nil, err
-		}
-		versions = append(versions, sn)
-	}
-
-	return versions, nil
-}
-
 func (procurve *ProcurveDevice) GetSerialNumbers(ctx context.Context) ([]string, error) {
-	serials := make([]string, 0)
+	ids := make([]string, 0)
+	sns := make([]string, 0)
 
-	ids, err := procurve.GetMembers(ctx)
+	keys, vals, err := procurve.WalkMIB(ctx, "entPhysicalName")
 	if err != nil {
 		return nil, err
 	}
 
+	for i, val := range vals {
+		if strings.ToLower(val) == "chassis" {
+			if strings.Count(keys[i], ".") != 1 {
+				return nil, fmt.Errorf("invalid MIB name returned while walking")
+			}
+			id := strings.Split(keys[i], ".")[1]
+			if err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+	}
+
 	for _, id := range ids {
-		serial, err := procurve.GetValueMIB(ctx, "entPhysicalSerialNum."+id)
+		sn, err := procurve.GetValueMIB(ctx, "entPhysicalSerialNum."+id)
 		if err != nil {
 			return nil, err
 		}
-		serials = append(serials, serial)
+		sns = append(sns, sn)
 	}
 
-	return serials, nil
+	return sns, nil
 }

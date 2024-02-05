@@ -2,10 +2,6 @@ package utils
 
 import "strings"
 
-func CommaJoin(s []string) string {
-	return strings.Join(s, ", ")
-}
-
 func RemoveCommas(s string) string {
 	return strings.ReplaceAll(s, ",", "")
 }
@@ -26,7 +22,7 @@ func TrimEmptyLines(slice []string) []string {
 
 func SplitLines(s string) []string {
 	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-	return TrimEmptyLines(lines)
+
 }
 
 func JoinLines(s []string) string {

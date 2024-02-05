@@ -141,8 +141,10 @@ func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, procurve.RegexInit()); err != nil {
+	if data, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, sequences); err != nil {
 		return err
+	} else {
+		log.Info().Bytes("data", data).Send()
 	}
 
 	if err := procurve.DisablePaging(ctx); err != nil {
@@ -162,6 +164,7 @@ func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
 		log.Info().Str("output", x.Output).Msg("failed to disable paging")
 		return err
 	}
+	log.Info().Str("output", x.Output).Msg("disabled paging")
 	return err
 }
 
@@ -174,7 +177,7 @@ func (procurve *ProcurveDevice) Cmd(ctx context.Context, timeout time.Duration, 
 	procurve.Connection.Send(buf.Bytes())
 
 	// read until the desired regex
-	data, err := procurve.Connection.ReadUntilMatch(ctx, timeout, procurve.RegexCmd())
+	data, err := procurve.Connection.ReadUntilMatch(ctx, timeout, sequences)
 	if err != nil {
 		return nil, err
 	}
@@ -245,25 +248,10 @@ func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) 
 }
 
 func (procurve *ProcurveDevice) GetVersion(ctx context.Context) ([]string, error) {
-	versions := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range ids {
-		sn, err := procurve.GetValueMIB(ctx, "entPhysicalSoftwareRev."+id)
-		if err != nil {
-			return nil, err
-		}
-		versions = append(versions, sn)
-	}
-
-	return versions, nil
+	return procurve.GetValueMIB(ctx, "hpHttpMgVersion.0")
 }
 
-func (procurve *ProcurveDevice) GetVersionBootROM(ctx context.Context) ([]string, error) {
+func (procurve *ProcurveDevice) GetBootROMVersion(ctx context.Context) ([]string, error) {
 	versions := make([]string, 0)
 
 	ids, err := procurve.GetMembers(ctx)
@@ -272,14 +260,16 @@ func (procurve *ProcurveDevice) GetVersionBootROM(ctx context.Context) ([]string
 	}
 
 	for _, id := range ids {
-		sn, err := procurve.GetValueMIB(ctx, "entPhysicalFirmwareRev."+id)
+		sn, err := procurve.GetValueMIB(ctx, "entPhysicalSerialNum."+id)
 		if err != nil {
 			return nil, err
 		}
 		versions = append(versions, sn)
 	}
 
-	return versions, nil
+	return serials, nil
+
+	return procurve.GetValueMIB(ctx, "hpHttpMgROMVersion.0")
 }
 
 func (procurve *ProcurveDevice) GetSerialNumbers(ctx context.Context) ([]string, error) {

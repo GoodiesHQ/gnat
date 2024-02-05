@@ -141,7 +141,7 @@ func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, procurve.RegexInit()); err != nil {
+	if _, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, procurve.RegexCmd()); err != nil {
 		return err
 	}
 
@@ -162,6 +162,7 @@ func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
 		log.Info().Str("output", x.Output).Msg("failed to disable paging")
 		return err
 	}
+	log.Info().Str("output", x.Output).Msg("disabled paging")
 	return err
 }
 

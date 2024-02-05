@@ -2,10 +2,6 @@ package utils
 
 import "strings"
 
-func CommaJoin(s []string) string {
-	return strings.Join(s, ", ")
-}
-
 func RemoveCommas(s string) string {
 	return strings.ReplaceAll(s, ",", "")
 }
