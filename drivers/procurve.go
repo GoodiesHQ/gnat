@@ -244,59 +244,40 @@ func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) 
 	return procurve.GetValueMIB(ctx, "sysName.0")
 }
 
+func (procurve *ProcurveDevice) GetEachMemberMIB(ctx context.Context, mib string) ([]string, error) {
+	values := make([]string, 0)
+
+	ids, err := procurve.GetMembers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, id := range ids {
+		value, err := procurve.GetValueMIB(ctx, mib+"."+id)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (procurve *ProcurveDevice) GetModelNumber(ctx context.Context) ([]string, error) {
+	return procurve.GetEachMemberMIB(ctx, "entPhysicalModelName")
+}
+
+func (procurve *ProcurveDevice) GetModelName(ctx context.Context) ([]string, error) {
+	return procurve.GetEachMemberMIB(ctx, "entPhysicalDescr")
+}
+
 func (procurve *ProcurveDevice) GetVersion(ctx context.Context) ([]string, error) {
-	versions := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range ids {
-		sn, err := procurve.GetValueMIB(ctx, "entPhysicalSoftwareRev."+id)
-		if err != nil {
-			return nil, err
-		}
-		versions = append(versions, sn)
-	}
-
-	return versions, nil
+	return procurve.GetEachMemberMIB(ctx, "entPhysicalSoftwareRev")
 }
 
-func (procurve *ProcurveDevice) GetVersionBootROM(ctx context.Context) ([]string, error) {
-	versions := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range ids {
-		sn, err := procurve.GetValueMIB(ctx, "entPhysicalFirmwareRev."+id)
-		if err != nil {
-			return nil, err
-		}
-		versions = append(versions, sn)
-	}
-
-	return versions, nil
+func (procurve *ProcurveDevice) GetVersionROM(ctx context.Context) ([]string, error) {
+	return procurve.GetEachMemberMIB(ctx, "entPhysicalFirmwareRev")
 }
 
-func (procurve *ProcurveDevice) GetSerialNumbers(ctx context.Context) ([]string, error) {
-	serials := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range ids {
-		serial, err := procurve.GetValueMIB(ctx, "entPhysicalSerialNum."+id)
-		if err != nil {
-			return nil, err
-		}
-		serials = append(serials, serial)
-	}
-
-	return serials, nil
+func (procurve *ProcurveDevice) GetSerialNumber(ctx context.Context) ([]string, error) {
+	return procurve.GetEachMemberMIB(ctx, "entPhysicalSerialNum")
 }
