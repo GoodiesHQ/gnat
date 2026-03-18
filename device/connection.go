@@ -6,66 +6,71 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"sync"
 	"time"
 
+	"github.com/goodieshq/gnat/utils"
 	"github.com/rs/zerolog/log"
 )
 
-/* a basic implementation of a DeviceConnection */
-
-// create a new device connection from a reader/writer combo
-func NewDeviceConnection(stdin io.WriteCloser, stdout io.Reader) DeviceConnection {
-	return &simpleDeviceConnection{
-		stdin:   stdin,  // input to the remote device
-		stdout:  stdout, // output from the remote device
-		ch:      nil,    // will initialize when it starts running
-		running: false,  // not running by default
+// NewConnection creates a Connection from an SSH stdin/stdout pair.
+func NewConnection(stdin io.WriteCloser, stdout io.Reader) Connection {
+	return &conn{
+		stdin:  stdin,
+		stdout: stdout,
 	}
 }
 
-type simpleDeviceConnection struct {
-	stdin   io.WriteCloser // input sent to the switch
-	stdout  io.Reader      // output read from the switch
-	ch      chan []byte    // channel for sending chunks of bytes through
-	mu      sync.RWMutex
-	running bool
+type conn struct {
+	stdin  io.WriteCloser
+	stdout io.Reader
+	ch     chan []byte  // owned by the reader goroutine
+	mu     sync.RWMutex // guards ch and cancel
+	cancel context.CancelFunc
 }
 
-func (conn *simpleDeviceConnection) Start(ctx context.Context) error {
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
+// Start launches the background reader goroutine. Safe to call multiple times —
+// subsequent calls are no-ops if the reader is already running.
+func (c *conn) Start(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if conn.running {
-		return nil
+	if c.ch != nil {
+		return nil // already running
 	}
 
-	conn.running = true
-	conn.ch = make(chan []byte)
+	c.ch = make(chan []byte)
+	ctxInternal, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
 
 	go func() {
-		defer conn.Stop()
+		defer func() {
+			c.mu.Lock()
+			close(c.ch)
+			c.ch = nil
+			c.mu.Unlock()
+			log.Debug().Msg("device reader stopped")
+		}()
 
-		log.Debug().Msg("started reader")
-		buf := make([]byte, 1024)
+		log.Debug().Msg("device reader started")
+		buf := make([]byte, 4096)
 
+		// Continuously read from the device until an error occurs (e.g. session closed).
+		// Feed each chunk into c.ch
 		for {
-			n, err := conn.stdout.Read(buf)
+			n, err := c.stdout.Read(buf)
 			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return
+				if !errors.Is(err, io.EOF) {
+					log.Error().Err(err).Msg("device read error")
 				}
-				log.Error().Err(err).Msg("connection errored out")
 				return
 			}
-			tmp := make([]byte, n)
-			copy(tmp, buf[:n])
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
 			select {
-			case <-ctx.Done():
-				log.Warn().Msg("context stopped in reader")
-			case conn.ch <- tmp:
-				// log.Debug().Msgf("Processed %d bytes from device", len(tmp))
+			case <-ctxInternal.Done():
+				return
+			case c.ch <- chunk:
 			}
 		}
 	}()
@@ -73,112 +78,52 @@ func (conn *simpleDeviceConnection) Start(ctx context.Context) error {
 	return nil
 }
 
-func (conn *simpleDeviceConnection) Stop() error {
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
-
-	if !conn.running {
-		log.Debug().Msg("connection already stopped")
-		return nil
+// Stop signals the reader goroutine to exit. The goroutine may remain alive until
+// the underlying SSH session closes (blocking Read returns).
+func (c *conn) Stop() error {
+	c.mu.Lock()
+	cancel := c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-
-	log.Debug().Msg("Stopping connection...")
-	close(conn.ch)
-	conn.running = false
-	// conn.ch = nil
 	return nil
 }
 
-func (conn *simpleDeviceConnection) FlushFor(ctx context.Context, t time.Duration) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, t)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-timeoutCtx.Done():
-			return nil
-		case _, ok := <-conn.ch:
-			if !ok {
-				return fmt.Errorf("flush chan not ok")
-			}
-		}
-	}
-}
-
-func (conn *simpleDeviceConnection) ReadUntilFunc(ctx context.Context, timeout time.Duration, f DeviceInputCondition) ([]byte, error) {
-	conn.Start(ctx)
-
-	conn.mu.RLock()
-	defer conn.mu.RUnlock()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	var buffer bytes.Buffer
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return buffer.Bytes(), fmt.Errorf("parent context is done")
-		case <-timeoutCtx.Done():
-			return buffer.Bytes(), fmt.Errorf("timeout reached without matching regex")
-		case tmp, ok := <-conn.ch:
-			if !ok {
-				err := fmt.Errorf("channel not ok while reading")
-				log.Error().Err(err).Send()
-				return nil, err
-			}
-			buffer.Write(tmp)
-		case <-ticker.C:
-			// does not truncate the bytes
-			if f(buffer.Bytes()) {
-				return buffer.Bytes(), nil
-			}
-		}
-	}
-}
-
-func (conn *simpleDeviceConnection) ReadUntilMatch(ctx context.Context, timeout time.Duration, regex *regexp.Regexp) ([]byte, error) {
-	return conn.ReadUntilFunc(ctx, timeout, func(b []byte) bool {
-		return regex.Match(b)
-	})
-}
-
-func (conn *simpleDeviceConnection) ReadFor(ctx context.Context, timeout time.Duration) ([]byte, error) {
-	conn.Start(ctx)
-
-	conn.mu.RLock()
-	defer conn.mu.RUnlock()
-
-	var buffer bytes.Buffer
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return buffer.Bytes(), fmt.Errorf("parent context is done")
-		case <-timeoutCtx.Done():
-			return buffer.Bytes(), fmt.Errorf("timeout reached without matching regex")
-		case tmp, ok := <-conn.ch:
-			if !ok {
-				err := fmt.Errorf("channel not ok while reading")
-				log.Error().Err(err).Send()
-				return nil, err
-			}
-			buffer.Write(tmp)
-		}
-	}
-}
-
-func (conn *simpleDeviceConnection) Send(data []byte) error {
-	// write data to the underling input socket
-	_, err := conn.stdin.Write(data)
+// Send writes raw bytes to the device.
+func (c *conn) Send(data []byte) error {
+	_, err := c.stdin.Write(data)
 	return err
+}
+
+// ReadUntilFunc reads from the device until the provided InputCondition returns true
+// Returns the sanitized output read up to and including the match that caused f to return true (or an error)
+func (c *conn) ReadUntilFunc(ctx context.Context, timeout time.Duration, f InputCondition) ([]byte, error) {
+	if err := c.Start(ctx); err != nil {
+		return nil, err
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var buf bytes.Buffer
+	for {
+		select {
+		case <-ctx.Done():
+			return buf.Bytes(), fmt.Errorf("context cancelled")
+		case <-timeoutCtx.Done():
+			return buf.Bytes(), fmt.Errorf("timeout after %s without prompt match", timeout)
+		case chunk, ok := <-c.ch:
+			if !ok {
+				return nil, fmt.Errorf("connection closed while reading")
+			}
+			buf.Write(chunk)
+			if f(utils.NormalizeLineEndings(utils.StripANSI(buf.Bytes()))) {
+				return buf.Bytes(), nil
+			}
+		}
+	}
 }

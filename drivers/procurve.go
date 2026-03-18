@@ -1,7 +1,6 @@
 package drivers
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -10,274 +9,157 @@ import (
 	"time"
 
 	"github.com/goodieshq/gnat/device"
-	"github.com/goodieshq/gnat/utils"
-	"github.com/rs/zerolog/log"
+	"github.com/goodieshq/gnat/driver"
 )
 
-type ProcurveDevice struct {
-	device.DeviceSettings
-	memberMIBs []string // MIB IDs for all members of a stack
+// Regexes for "show system information" output.
+//
+// The output has a two-column layout. Some values of interest share a line with
+// an unrelated label in the other column, e.g.:
+//
+//	Up Time   : 165 days    Memory   - Total   : 683,610,112
+//	CPU Util (%): 10                            Free    : 490,370,760
+//
+// The memory cross-line regex bridges exactly one newline with [^\n]* to reach
+// the Free value on the following line without using dot-all mode.
+var (
+	procurveSysNameRe   = regexp.MustCompile(`(?m)System Name\s+:\s+(\S+)`)
+	procurveSysSWRe     = regexp.MustCompile(`(?m)Software revision\s+:\s+(\S+)`)
+	procurveSysROMRe    = regexp.MustCompile(`(?m)ROM Version\s+:\s+(\S+)`)
+	procurveSysSerialRe = regexp.MustCompile(`(?m)Serial Number\s+:\s+(\S+)`)
+	procurveSysCPURe    = regexp.MustCompile(`(?m)CPU Util \(%\)\s+:\s+(\d+)`)
+	// Captures Total on one line, then Free on the next line.
+	procurveSysMemRe = regexp.MustCompile(`Memory\s+-\s+Total\s+:\s+([\d,]+)[^\n]*\n[^\n]*Free\s+:\s+([\d,]+)`)
+)
+
+type ProcurveDriver struct {
+	*driver.Driver
 }
 
-func NewProcurveDevice(settings device.DeviceSettings) device.DeviceSwitch {
-	return &ProcurveDevice{DeviceSettings: settings}
-}
-
-func RegisterProcurve() error {
-	return RegisterDeviceSwitch("procurve", NewProcurveDevice)
-}
-
-// remote ansi escape sequences, from stripansi package
-var ansi = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
-
-// all procurve versions seem to have 5 ansi escape sequences following the "#" from the prompt
-var sequences = regexp.MustCompile(`#\s+(\x1b\[(\??)\d+(;?)\d+[a-zA-Z]){5}`)
-
-func (procurve *ProcurveDevice) GetValueMIB(ctx context.Context, mib string) (string, error) {
-	_, v, err := procurve.GetMIB(ctx, mib)
-	return v, err
-}
-
-func (procurve *ProcurveDevice) GetMembers(ctx context.Context) ([]string, error) {
-	if procurve.memberMIBs != nil {
-		return procurve.memberMIBs, nil
-	}
-
-	ids := make([]string, 0)
-
-	keys, vals, err := procurve.WalkMIB(ctx, "entPhysicalName")
-	if err != nil {
-		return nil, err
-	}
-
-	for i, val := range vals {
-		// find only physical devices with the type "chassis", these are the physical switches
-		if strings.ToLower(val) == "chassis" {
-			if strings.Count(keys[i], ".") != 1 {
-				return nil, fmt.Errorf("invalid MIB name returned while walking")
-			}
-			// extract the SNMP device ID
-			id := strings.Split(keys[i], ".")[1]
-			if err != nil {
-				return nil, err
-			}
-			ids = append(ids, id)
-		}
-	}
-
-	procurve.memberMIBs = ids
-
-	return procurve.memberMIBs, nil
-}
-
-func (procurve *ProcurveDevice) GetMIB(ctx context.Context, mib string) (string, string, error) {
-	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, fmt.Sprintf("getMIB %s", mib))
-	if err != nil {
-		return "", "", err
-	}
-
-	sep := " ="
-
-	if strings.Count(result.Output, sep) != 1 {
-		return "", "", fmt.Errorf("invalid MIB '%s'", result.Output)
-	}
-
-	vals := strings.Split(result.Output, sep)
-	return strings.TrimSpace(vals[0]), strings.TrimSpace(vals[1]), nil
-}
-
-func (procurve *ProcurveDevice) WalkMIB(ctx context.Context, mib string) ([]string, []string, error) {
-	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, fmt.Sprintf("walkMIB %s", mib))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	sep := " ="
-	lines := utils.SplitLines(result.Output)
-
-	keys := make([]string, len(lines))
-	vals := make([]string, len(lines))
-
-	for _, line := range lines {
-		if strings.Count(line, sep) != 1 {
-			return nil, nil, fmt.Errorf("invalid output '%s'", line)
-		}
-		kv := strings.Split(line, sep)
-
-		k, v := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
-
-		keys = append(keys, k)
-		vals = append(vals, v)
-	}
-	return keys, vals, nil
-}
-
-func (procurve *ProcurveDevice) Sanitize(output []byte) string {
-	var data []byte
-	if len(output) == 0 {
-		return ""
-	}
-
-	data = ansi.ReplaceAll(output, nil)
-
-	idx := bytes.LastIndex(data, []byte("\n"))
-	if idx < 0 {
-		return ""
-	}
-	data = data[:idx+1]
-	return string(data)
-}
-
-func (procurve *ProcurveDevice) RegexInit() *regexp.Regexp {
-	return sequences
-}
-
-func (procurve *ProcurveDevice) RegexCmd() *regexp.Regexp {
-	return sequences
-}
-
-func (procurve *ProcurveDevice) Initialize(ctx context.Context) error {
-	if err := procurve.Connection.Send([]byte{'\n'}); err != nil {
-		return err
-	}
-
-	if _, err := procurve.Connection.ReadUntilMatch(ctx, procurve.TimeoutRead, procurve.RegexInit()); err != nil {
-		return err
-	}
-
-	if err := procurve.DisablePaging(ctx); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (procurve *ProcurveDevice) FlushFor(ctx context.Context, t time.Duration) error {
-	return procurve.Connection.FlushFor(ctx, t)
-}
-
-func (procurve *ProcurveDevice) DisablePaging(ctx context.Context) error {
-	x, err := procurve.Cmd(ctx, procurve.TimeoutRead, "no page")
-	if err != nil {
-		log.Info().Str("output", x.Output).Msg("failed to disable paging")
-		return err
-	}
-	return err
-}
-
-func (procurve *ProcurveDevice) Cmd(ctx context.Context, timeout time.Duration, command string) (*device.DeviceResult, error) {
-	// write the command to the buffer along with a newline
-	var buf bytes.Buffer
-	buf.WriteString(command)
-	buf.WriteByte('\n')
-
-	procurve.Connection.Send(buf.Bytes())
-
-	// read until the desired regex
-	data, err := procurve.Connection.ReadUntilMatch(ctx, timeout, procurve.RegexCmd())
-	if err != nil {
-		return nil, err
-	}
-
-	sdata := strings.TrimPrefix(procurve.Sanitize(data), command)
-
-	return &device.DeviceResult{
-		Output:  sdata,
-		Command: command,
-	}, nil
-}
-
-func (procurve *ProcurveDevice) GetRunningConfig(ctx context.Context) (string, error) {
-	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, "write terminal")
+// sysInfo runs "show system information" and returns the raw output.
+func (d *ProcurveDriver) sysInfo(ctx context.Context, timeout time.Duration) (string, error) {
+	result, err := d.Cmd(ctx, timeout, "show system information")
 	if err != nil {
 		return "", err
 	}
-	return utils.JoinLines(utils.SplitLines(result.Output)), nil
+	if result.Failed {
+		return "", fmt.Errorf("device error: %s", result.FailMsg)
+	}
+	return result.Output, nil
 }
 
-func (procurve *ProcurveDevice) GetLogs(ctx context.Context) (string, error) {
-	result, err := procurve.Cmd(ctx, procurve.TimeoutRead, "show log -r")
+// stripCommas removes comma thousands-separators so "683,610,112" parses cleanly.
+func stripCommas(s string) string {
+	return strings.ReplaceAll(s, ",", "")
+}
+
+func (d *ProcurveDriver) GetHostname(ctx context.Context, timeout time.Duration) (string, error) {
+	out, err := d.sysInfo(ctx, timeout)
 	if err != nil {
 		return "", err
 	}
-	return utils.JoinLines(utils.SplitLines(result.Output)), nil
+	m := procurveSysNameRe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return "", fmt.Errorf("hostname not found in show system information")
+	}
+	return m[1], nil
 }
 
-func (procurve *ProcurveDevice) GetCPU(ctx context.Context) (int, error) {
-	s, err := procurve.GetValueMIB(ctx, "hpSwitchCpuStat.0")
-	if err != nil {
-		return -1, err
-	}
-
-	return strconv.Atoi(strings.Replace(s, ",", "", -1))
-}
-
-func (procurve *ProcurveDevice) GetRAM(ctx context.Context) (int, error) {
-	memAllocStr, err := procurve.GetValueMIB(ctx, "hpLocalMemAllocBytes.1")
-	if err != nil {
-		return -1, err
-	}
-
-	memTotalStr, err := procurve.GetValueMIB(ctx, "hpLocalMemTotalBytes.1")
-	if err != nil {
-		return -1, err
-	}
-
-	memAlloc, err := strconv.Atoi(strings.ReplaceAll(memAllocStr, ",", ""))
-	if err != nil {
-		return -1, err
-	}
-
-	memTotal, err := strconv.Atoi(strings.ReplaceAll(memTotalStr, ",", ""))
-	if err != nil {
-		return -1, err
-	}
-
-	return (100 * memAlloc / memTotal), nil
-}
-
-func (procurve *ProcurveDevice) GetUptime(ctx context.Context) (string, error) {
-	return procurve.GetValueMIB(ctx, "sysUpTime.0")
-}
-
-func (procurve *ProcurveDevice) GetSysname(ctx context.Context) (string, error) {
-	return procurve.GetValueMIB(ctx, "sysName.0")
-}
-
-func (procurve *ProcurveDevice) GetEachMemberMIB(ctx context.Context, mib string) ([]string, error) {
-	values := make([]string, 0)
-
-	ids, err := procurve.GetMembers(ctx)
+func (d *ProcurveDriver) GetVersion(ctx context.Context, timeout time.Duration) ([]*driver.FirmwareInfo, error) {
+	out, err := d.sysInfo(ctx, timeout)
 	if err != nil {
 		return nil, err
 	}
-
-	for _, id := range ids {
-		value, err := procurve.GetValueMIB(ctx, mib+"."+id)
-		if err != nil {
-			return nil, err
-		}
-		values = append(values, value)
+	m := procurveSysSWRe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return []*driver.FirmwareInfo{}, nil
 	}
-	return values, nil
+	return []*driver.FirmwareInfo{{Version: m[1]}}, nil
 }
 
-func (procurve *ProcurveDevice) GetModelNumber(ctx context.Context) ([]string, error) {
-	return procurve.GetEachMemberMIB(ctx, "entPhysicalModelName")
+func (d *ProcurveDriver) GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]*driver.FirmwareInfo, error) {
+	out, err := d.sysInfo(ctx, timeout)
+	if err != nil {
+		return nil, err
+	}
+	m := procurveSysROMRe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return []*driver.FirmwareInfo{}, nil
+	}
+	return []*driver.FirmwareInfo{{Version: m[1]}}, nil
 }
 
-func (procurve *ProcurveDevice) GetModelName(ctx context.Context) ([]string, error) {
-	return procurve.GetEachMemberMIB(ctx, "entPhysicalDescr")
+func (d *ProcurveDriver) GetSerialNumber(ctx context.Context, timeout time.Duration) (string, error) {
+	out, err := d.sysInfo(ctx, timeout)
+	if err != nil {
+		return "", err
+	}
+	m := procurveSysSerialRe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return "", fmt.Errorf("serial number not found in show system information")
+	}
+	return m[1], nil
 }
 
-func (procurve *ProcurveDevice) GetVersion(ctx context.Context) ([]string, error) {
-	return procurve.GetEachMemberMIB(ctx, "entPhysicalSoftwareRev")
+func (d *ProcurveDriver) GetCPU(ctx context.Context, timeout time.Duration) (int, error) {
+	out, err := d.sysInfo(ctx, timeout)
+	if err != nil {
+		return 0, err
+	}
+	m := procurveSysCPURe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return 0, fmt.Errorf("CPU utilization not found in show system information")
+	}
+	return strconv.Atoi(m[1])
 }
 
-func (procurve *ProcurveDevice) GetVersionROM(ctx context.Context) ([]string, error) {
-	return procurve.GetEachMemberMIB(ctx, "entPhysicalFirmwareRev")
+func (d *ProcurveDriver) GetRAM(ctx context.Context, timeout time.Duration) (*driver.RAMInfo, error) {
+	out, err := d.sysInfo(ctx, timeout)
+	if err != nil {
+		return nil, err
+	}
+	m := procurveSysMemRe.FindStringSubmatch(out)
+	if len(m) < 3 {
+		return nil, fmt.Errorf("memory info not found in show system information")
+	}
+	total, err := strconv.ParseInt(stripCommas(m[1]), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse memory total: %w", err)
+	}
+	free, err := strconv.ParseInt(stripCommas(m[2]), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse memory free: %w", err)
+	}
+	return &driver.RAMInfo{Total: total, Free: free}, nil
 }
 
-func (procurve *ProcurveDevice) GetSerialNumber(ctx context.Context) ([]string, error) {
-	return procurve.GetEachMemberMIB(ctx, "entPhysicalSerialNum")
+func (d *ProcurveDriver) GetConfig(ctx context.Context, timeout time.Duration) (string, error) {
+	result, err := d.Cmd(ctx, timeout, "write terminal")
+	if err != nil {
+		return "", err
+	}
+	if result.Failed {
+		return "", fmt.Errorf("device error: %s", result.FailMsg)
+	}
+	return result.Output, nil
+}
+
+// ProcurveProfile defines the command prompt and error patterns for HP Procurve switches.
+var procurveProfile = driver.Profile{
+	PrivPrompt: regexp.MustCompile(`\S+#\s*$`),
+	UserPrompt: regexp.MustCompile(`\S+>\s*$`),
+	Errors: []*regexp.Regexp{
+		regexp.MustCompile(`(?i)invalid input`),
+		regexp.MustCompile(`(?i)ambiguous command`),
+		regexp.MustCompile(`(?i)error:`),
+	},
+	DisablePaging: "no page",
+}
+
+func init() {
+	driver.Register("procurve", func(s device.Settings) device.Device {
+		return &ProcurveDriver{
+			Driver: &driver.Driver{Settings: s, Profile: procurveProfile},
+		}
+	})
 }

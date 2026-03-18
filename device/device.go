@@ -2,40 +2,41 @@ package device
 
 import (
 	"context"
-	"regexp"
 	"time"
 )
 
+const DefaultTimeout = 30 * time.Second
+
+// Device is the minimal interface for interacting with a network switch.
 type Device interface {
-	Sanitize([]byte) string                                            // sanitizes output from switches
-	RegexInit() *regexp.Regexp                                         // identifies the start of a connection
-	RegexCmd() *regexp.Regexp                                          // identifies the start of the next prompt and the output of the current command
-	Initialize(context.Context) error                                  // run any commands necessary to start the connection
-	DisablePaging(context.Context) error                               // stop the switch from taking breaks in between long outputs
-	Cmd(context.Context, time.Duration, string) (*DeviceResult, error) // Run a command and receive the output/switch error as a result
-	FlushFor(context.Context, time.Duration) error                     // flush the read data for a period of time (useful if the last command timed out)
+	Initialize(ctx context.Context) error
+	DisablePaging(ctx context.Context) error
+	Cmd(ctx context.Context, timeout time.Duration, command string) (*Result, error)
 }
 
-type DeviceInputCondition func([]byte) bool
+// InputCondition returns true when the accumulated output satisfies a completion criterion.
+type InputCondition func([]byte) bool
 
-type DeviceConnection interface {
-	Start(context.Context) error
+// Connection is the low-level I/O interface for a device session.
+type Connection interface {
+	Start(ctx context.Context) error
 	Stop() error
-	FlushFor(context.Context, time.Duration) error
-	ReadUntilFunc(context.Context, time.Duration, DeviceInputCondition) ([]byte, error)
-	ReadUntilMatch(context.Context, time.Duration, *regexp.Regexp) ([]byte, error)
-	ReadFor(context.Context, time.Duration) ([]byte, error)
-	Send([]byte) error
+	Send(data []byte) error
+	ReadUntilFunc(ctx context.Context, timeout time.Duration, f InputCondition) ([]byte, error)
 }
 
-const DEFAULT_TIMEOUT_READ = time.Second * 5
-
-type DeviceSettings struct {
-	Connection  DeviceConnection
-	TimeoutRead time.Duration
+// Settings holds the connection and timing configuration shared by all drivers.
+type Settings struct {
+	DriverName     string
+	Connection     Connection
+	Timeout        time.Duration // default command timeout; 0 uses DefaultTimeout
+	EnablePassword *string       // nil means no enable password is required
 }
 
-type DeviceResult struct {
+// Result is the output of a single command execution.
+type Result struct {
 	Command string
 	Output  string
+	Failed  bool
+	FailMsg string
 }
