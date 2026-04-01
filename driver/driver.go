@@ -83,6 +83,10 @@ func (d *Driver) atUserPrompt(raw []byte) bool {
 // Cmd sends a command and returns sanitized output with error detection.
 // Pass timeout=0 to use the configured default.
 func (d *Driver) Cmd(ctx context.Context, timeout time.Duration, command string) (*device.Result, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	if timeout == 0 {
 		timeout = d.defaultTimeout()
 	}
@@ -123,6 +127,9 @@ func (d *Driver) readUntilPrivPrompt(ctx context.Context, timeout time.Duration)
 // EnablePassword is nil an empty string is sent (covers devices that accept
 // a blank enable password).
 func (d *Driver) Initialize(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := d.Connection.Send([]byte("\n")); err != nil {
 		return fmt.Errorf("initialize wake: %w", err)
 	}
