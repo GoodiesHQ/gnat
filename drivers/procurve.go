@@ -68,28 +68,28 @@ func (d *ProcurveDriver) GetHostname(ctx context.Context, timeout time.Duration)
 	return m[1], nil
 }
 
-func (d *ProcurveDriver) GetVersion(ctx context.Context, timeout time.Duration) ([]*driver.FirmwareInfo, error) {
+func (d *ProcurveDriver) GetVersion(ctx context.Context, timeout time.Duration) ([]string, error) {
 	out, err := d.sysInfo(ctx, timeout)
 	if err != nil {
 		return nil, err
 	}
 	m := procurveSysSWRe.FindStringSubmatch(out)
 	if len(m) < 2 {
-		return []*driver.FirmwareInfo{}, nil
+		return []string{}, nil
 	}
-	return []*driver.FirmwareInfo{{Version: m[1]}}, nil
+	return []string{m[1]}, nil
 }
 
-func (d *ProcurveDriver) GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]*driver.FirmwareInfo, error) {
+func (d *ProcurveDriver) GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]string, error) {
 	out, err := d.sysInfo(ctx, timeout)
 	if err != nil {
 		return nil, err
 	}
 	m := procurveSysROMRe.FindStringSubmatch(out)
 	if len(m) < 2 {
-		return []*driver.FirmwareInfo{}, nil
+		return []string{}, nil
 	}
-	return []*driver.FirmwareInfo{{Version: m[1]}}, nil
+	return []string{m[1]}, nil
 }
 
 func (d *ProcurveDriver) GetSerialNumber(ctx context.Context, timeout time.Duration) ([]string, error) {

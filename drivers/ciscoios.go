@@ -65,34 +65,34 @@ func (d *CiscoIOSDriver) GetHostname(ctx context.Context, timeout time.Duration)
 	return m[1], nil
 }
 
-func (d *CiscoIOSDriver) GetVersion(ctx context.Context, timeout time.Duration) ([]*driver.FirmwareInfo, error) {
+func (d *CiscoIOSDriver) GetVersion(ctx context.Context, timeout time.Duration) ([]string, error) {
 	out, err := d.showVersion(ctx, timeout)
 	if err != nil {
 		return nil, err
 	}
 	matches := ciscoiosVersionRe.FindAllStringSubmatch(out, -1)
 	if len(matches) == 0 {
-		return []*driver.FirmwareInfo{}, nil
+		return []string{}, nil
 	}
-	infos := make([]*driver.FirmwareInfo, len(matches))
+	infos := make([]string, len(matches))
 	for i, m := range matches {
-		infos[i] = &driver.FirmwareInfo{Version: m[1]}
+		infos[i] = m[1]
 	}
 	return infos, nil
 }
 
-func (d *CiscoIOSDriver) GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]*driver.FirmwareInfo, error) {
+func (d *CiscoIOSDriver) GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]string, error) {
 	out, err := d.showVersion(ctx, timeout)
 	if err != nil {
 		return nil, err
 	}
 	matches := ciscoiosBootromRe.FindAllStringSubmatch(out, -1)
 	if len(matches) == 0 {
-		return []*driver.FirmwareInfo{}, nil
+		return []string{}, nil
 	}
-	infos := make([]*driver.FirmwareInfo, len(matches))
+	infos := make([]string, len(matches))
 	for i, m := range matches {
-		infos[i] = &driver.FirmwareInfo{Version: m[1]}
+		infos[i] = m[1]
 	}
 	return infos, nil
 }

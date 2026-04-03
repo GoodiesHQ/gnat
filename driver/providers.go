@@ -5,13 +5,9 @@ import (
 	"time"
 )
 
-type FirmwareInfo struct {
-	Version string
-}
-
 type ProviderFirmware interface {
-	GetVersion(ctx context.Context, timeout time.Duration) ([]*FirmwareInfo, error)
-	GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]*FirmwareInfo, error)
+	GetVersion(ctx context.Context, timeout time.Duration) ([]string, error)
+	GetVersionBootROM(ctx context.Context, timeout time.Duration) ([]string, error)
 }
 
 type ProviderCPU interface {
