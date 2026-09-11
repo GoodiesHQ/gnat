@@ -1,8 +1,12 @@
 package device
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -83,14 +87,54 @@ func UsernamePasswordConfig(username, password string) *ssh.ClientConfig {
 
 // NewSSHConnection dials an SSH session and returns a DeviceConnection plus a done()
 // function that closes the session and client when called.
-func NewSSHConnection(host string, port uint16, config *ssh.ClientConfig) (Connection, func(), error) {
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", host, port), config)
+func NewSSHConnection(ctx context.Context, host string, port uint16, config *ssh.ClientConfig) (Connection, func(), error) {
+	// target formed from proper host + port joining
+	target := net.JoinHostPort(host, strconv.Itoa(int(port)))
+
+	// create an SSH session manually
+	dialer := net.Dialer{Timeout: config.Timeout}
+	transport, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
-		return nil, nil, fmt.Errorf("dial %s:%d: %w", host, port, err)
+		return nil, nil, fmt.Errorf("dial %s: %w", target, err)
 	}
 
+	connection := &conn{}
+
+	// enforce cleanup exactly once
 	doneCh := make(chan struct{})
-	done := func() { close(doneCh) }
+	var once sync.Once
+
+	done := func() {
+		once.Do(func() {
+			_ = connection.Stop()
+			_ = transport.Close()
+			close(doneCh)
+		})
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			done()
+		case <-doneCh:
+		}
+	}()
+
+	sshConn, channels, requests, err := ssh.NewClientConn(transport, target, config)
+	if err != nil {
+		done()
+		if ctx.Err() != nil {
+			return nil, nil, fmt.Errorf("ssh handshake ctx: %w", ctx.Err())
+		}
+		return nil, nil, fmt.Errorf("ssh handshake: %w", err)
+	}
+
+	// build ssh client from parts
+	client := ssh.NewClient(sshConn, channels, requests)
+	go func() {
+		_ = client.Wait()
+		done()
+	}()
 
 	closeWhenDone := func(c io.Closer) {
 		go func() {
@@ -100,6 +144,9 @@ func NewSSHConnection(host string, port uint16, config *ssh.ClientConfig) (Conne
 	}
 	closeWhenDone(client)
 
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("failed before ssh session: %w", err)
+	}
 	session, err := client.NewSession()
 	if err != nil {
 		done()
@@ -114,6 +161,9 @@ func NewSSHConnection(host string, port uint16, config *ssh.ClientConfig) (Conne
 	}
 	if err := session.RequestPty("xterm", 100, 250, modes); err != nil {
 		done()
+		if err := ctx.Err(); err != nil {
+			return nil, nil, fmt.Errorf("request pty ctx: %w", err)
+		}
 		return nil, nil, fmt.Errorf("request pty: %w", err)
 	}
 
@@ -131,9 +181,31 @@ func NewSSHConnection(host string, port uint16, config *ssh.ClientConfig) (Conne
 
 	if err := session.Shell(); err != nil {
 		done()
+		if err := ctx.Err(); err != nil {
+			return nil, nil, fmt.Errorf("start shell ctx: %w", err)
+		}
 		return nil, nil, fmt.Errorf("start shell: %w", err)
 	}
 
-	log.Debug().Msgf("SSH session established to %s:%d", host, port)
-	return NewConnection(pipeStdin, pipeStdout), done, nil
+	connection.mu.Lock()
+	connection.stdin = pipeStdin
+	connection.stdout = pipeStdout
+	connection.mu.Unlock()
+
+	connection.mu.RLock()
+	err = connection.err
+	connection.mu.RUnlock()
+
+	if err := ctx.Err(); err != nil {
+		done()
+		return nil, nil, fmt.Errorf("ssh setup canceled: %w", err)
+	}
+
+	if err != nil {
+		done()
+		return nil, nil, fmt.Errorf("ssh connection failed during setup: %w", err)
+	}
+
+	log.Debug().Msgf("ssh session established to %s", target)
+	return connection, done, nil
 }

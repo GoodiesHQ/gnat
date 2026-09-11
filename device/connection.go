@@ -13,20 +13,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// NewConnection creates a Connection from an SSH stdin/stdout pair.
-func NewConnection(stdin io.WriteCloser, stdout io.Reader) Connection {
-	return &conn{
-		stdin:  stdin,
-		stdout: stdout,
-	}
-}
-
 type conn struct {
 	stdin  io.WriteCloser
 	stdout io.Reader
-	ch     chan []byte  // owned by the reader goroutine
-	mu     sync.RWMutex // guards ch and cancel
-	cancel context.CancelFunc
+	ch     chan []byte        // owned by the reader goroutine
+	cancel context.CancelFunc // cancel func  to kill the conn's context
+	err    error              // any early connection error
+	mu     sync.RWMutex       // guards ch and cancel
 }
 
 // Start launches the background reader goroutine. Safe to call multiple times —
@@ -34,6 +27,10 @@ type conn struct {
 func (c *conn) Start(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.err != nil {
+		return c.err
+	}
 
 	if c.ch != nil {
 		return nil // already running
@@ -43,11 +40,16 @@ func (c *conn) Start(ctx context.Context) error {
 	ctxInternal, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	go func() {
+	go func(ch chan []byte) {
+		var errConn error
+
 		defer func() {
+			cancel()
 			c.mu.Lock()
-			close(c.ch)
-			c.ch = nil
+			if c.err == nil {
+				c.err = errConn
+			}
+			close(ch)
 			c.mu.Unlock()
 			log.Debug().Msg("device reader stopped")
 		}()
@@ -56,24 +58,37 @@ func (c *conn) Start(ctx context.Context) error {
 		buf := make([]byte, 4096)
 
 		// Continuously read from the device until an error occurs (e.g. session closed).
-		// Feed each chunk into c.ch
+		// Feed each chunk into ch
 		for {
+			if err := ctxInternal.Err(); err != nil {
+				errConn = err
+				return
+			}
+
 			n, err := c.stdout.Read(buf)
+
+			// Readers could return data + an error
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+
+				select {
+				case <-ctxInternal.Done():
+					errConn = ctxInternal.Err()
+					return
+				case ch <- chunk:
+				}
+			}
+
 			if err != nil {
+				errConn = err
 				if !errors.Is(err, io.EOF) {
 					log.Error().Err(err).Msg("device read error")
 				}
 				return
 			}
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			select {
-			case <-ctxInternal.Done():
-				return
-			case c.ch <- chunk:
-			}
 		}
-	}()
+	}(c.ch)
 
 	return nil
 }
@@ -82,6 +97,10 @@ func (c *conn) Start(ctx context.Context) error {
 // the underlying SSH session closes (blocking Read returns).
 func (c *conn) Stop() error {
 	c.mu.Lock()
+	// If no other error, mark pipe as closed
+	if c.err == nil {
+		c.err = io.ErrClosedPipe
+	}
 	cancel := c.cancel
 	c.mu.Unlock()
 	if cancel != nil {
@@ -92,19 +111,33 @@ func (c *conn) Stop() error {
 
 // Send writes raw bytes to the device.
 func (c *conn) Send(data []byte) error {
-	_, err := c.stdin.Write(data)
+	c.mu.RLock()
+	err := c.err
+	c.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.stdin.Write(data)
 	return err
 }
 
 // ReadUntilFunc reads from the device until the provided InputCondition returns true
 // Returns the sanitized output read up to and including the match that caused f to return true (or an error)
 func (c *conn) ReadUntilFunc(ctx context.Context, timeout time.Duration, f InputCondition) ([]byte, error) {
-	if err := c.Start(ctx); err != nil {
+	// check ctx err first
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// start conn on a separate lifetime from the context
+	if err := c.Start(context.Background()); err != nil {
 		return nil, err
 	}
 
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	ch := c.ch
+	c.mu.RUnlock()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -112,13 +145,15 @@ func (c *conn) ReadUntilFunc(ctx context.Context, timeout time.Duration, f Input
 	var buf bytes.Buffer
 	for {
 		select {
-		case <-ctx.Done():
-			return buf.Bytes(), fmt.Errorf("context cancelled")
 		case <-timeoutCtx.Done():
-			return buf.Bytes(), fmt.Errorf("timeout after %s without prompt match", timeout)
-		case chunk, ok := <-c.ch:
+			return buf.Bytes(), fmt.Errorf("command response read interrupted: %w", timeoutCtx.Err())
+		case chunk, ok := <-ch:
 			if !ok {
-				return nil, fmt.Errorf("connection closed while reading")
+				c.mu.RLock()
+				err := c.err
+				c.mu.RUnlock()
+
+				return buf.Bytes(), fmt.Errorf("connection closed while reading: %w", err)
 			}
 			buf.Write(chunk)
 			if f(utils.NormalizeLineEndings(utils.StripANSI(buf.Bytes()))) {
